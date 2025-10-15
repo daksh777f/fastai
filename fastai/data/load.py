@@ -9,7 +9,7 @@ from torch.utils.data.dataloader import _MultiProcessingDataLoaderIter,_SinglePr
 _loaders = (_MultiProcessingDataLoaderIter,_SingleProcessDataLoaderIter)
 
 # %% auto 0
-__all__ = ['fa_collate', 'fa_convert', 'SkipItemException', 'collate_error', 'DataLoader']
+__all__ = ['fa_collate', 'fa_convert', 'SkipItemException', 'collate_error', 'DataLoader', 'FastTensorDataLoader']
 
 # %% ../../nbs/02_data.load.ipynb 8
 def _wif(worker_id):
@@ -213,3 +213,63 @@ add_docs(DataLoader, "API compatible with PyTorch DataLoader, with a lot more ca
          before_batch   = "It is called before collating a list of items into a batch. Input is a list of items.",
          after_batch    = "After collating mini-batch of items, the mini-batch is passed through this function.",
          after_iter     = "Called after `DataLoader` has fully read/iterated over the dataset.")
+
+# %% Added: High-throughput tensor-only DataLoader
+class FastTensorDataLoader:
+    """
+    Minimal, high-throughput DataLoader for preloaded torch.Tensors.
+
+    - Accepts one or more tensors sharing the same first dimension.
+    - Yields batches by slicing, avoiding Python-level itemization/collation.
+    - Supports shuffle, drop_last, and device transfer.
+    - Designed to be used directly with `DataLoaders(train_dl, valid_dl)`.
+    """
+    def __init__(self, *tensors: Tensor, batch_size: int = 1024, shuffle: bool = False,
+                 drop_last: bool = False, device: torch.device | str | int | None = None):
+        if len(tensors) == 0:
+            raise ValueError("FastTensorDataLoader requires at least one tensor")
+        n = int(tensors[0].shape[0])
+        for t in tensors:
+            if not isinstance(t, Tensor):
+                raise TypeError("All inputs to FastTensorDataLoader must be torch.Tensors")
+            if int(t.shape[0]) != n:
+                raise ValueError("All tensors must have the same first dimension (number of examples)")
+        self.tensors = tuple(tensors)
+        self.n = n
+        self.bs = int(batch_size) if batch_size is not None else n
+        self.shuffle = bool(shuffle)
+        self.drop_last = bool(drop_last)
+        self._device: torch.device | None = None
+        if device is not None: self.to(device)
+
+    def __len__(self):
+        if self.bs is None or self.bs <= 0: return 1
+        if self.drop_last: return self.n // self.bs
+        return (self.n + self.bs - 1) // self.bs
+
+    @property
+    def device(self) -> torch.device | None:
+        return self._device
+
+    def to(self, device: torch.device | str | int | None):
+        self._device, *_ = torch._C._nn._parse_to(device=device)
+        return self
+
+    def _batch_slice(self, idx):
+        b = tuple(t[idx] for t in self.tensors)
+        if self._device is not None:
+            b = tuple(to_device(x, self._device) for x in b)
+        return b if len(b) > 1 else b[0]
+
+    def __iter__(self):
+        # Construct index order once per epoch
+        if self.shuffle:
+            order = torch.randperm(self.n)
+        else:
+            order = torch.arange(self.n)
+        # Yield slices
+        for start in range(0, self.n if not self.drop_last else (self.n // self.bs) * self.bs, self.bs):
+            stop = start + self.bs
+            idx = order[start:stop]
+            if idx.numel() == 0: continue
+            yield self._batch_slice(idx)
