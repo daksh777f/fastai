@@ -68,7 +68,8 @@ def SchedPoly(start, end, power):
 # %% ../../nbs/14_callback.schedule.ipynb 28
 def combine_scheds(pcts, scheds):
     "Combine `scheds` according to `pcts` in one function"
-    assert sum(pcts) == 1.
+    # Allow for floating point rounding issues when summing percentages
+    assert math.isclose(sum(pcts), 1.0, rel_tol=1e-6, abs_tol=1e-8)
     pcts = tensor([0] + L(pcts))
     assert torch.all(pcts >= 0)
     pcts = torch.cumsum(pcts, 0)

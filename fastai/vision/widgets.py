@@ -42,7 +42,7 @@ def carousel(
     **layout
 ) -> Box: # An `ipywidget`'s carousel
     "A horizontally scrolling carousel"
-    def_layout = dict(overflow='scroll hidden', flex_flow='row', display='flex')
+    def_layout = dict(overflow_x='auto', overflow_y='hidden', flex_flow='row', display='flex')
     res = Box([], layout=merge(def_layout, layout))
     res.observe(_update_children, names='children')
     res.children = children
